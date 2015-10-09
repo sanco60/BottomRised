@@ -176,6 +176,7 @@ BOOL InputInfoThenCalc2(char * Code,short nSetCode,int Value[4],short DataType,N
 			}
 		
 			LPHISDAT pHisDat = new HISDAT[datanum];
+			memset(pHisDat, 0, datanum*sizeof(HISDAT));
 
 			long readnum = g_pFuncCallBack(g_nFatherCode[eFCode],nSetCode,DataType,pHisDat,datanum,time1,time2,nTQ,0);
 			if ( 2 > readnum || readnum > datanum )
@@ -214,6 +215,7 @@ BOOL InputInfoThenCalc2(char * Code,short nSetCode,int Value[4],short DataType,N
 	{
 		LPSTOCKINFO pStockInfo = new STOCKINFO[2];
 		memset(pStockInfo, 0, 2*sizeof(STOCKINFO));
+
 		long readnum = g_pFuncCallBack(Code, nSetCode, STKINFO_DAT, pStockInfo, 1, time2, time2, nTQ, 0);
 		if (readnum <= 0)
 		{
@@ -245,6 +247,7 @@ BOOL InputInfoThenCalc2(char * Code,short nSetCode,int Value[4],short DataType,N
 		}
 
 		LPHISDAT pHisDat = new HISDAT[datanum];
+		memset(pHisDat, 0, datanum*sizeof(HISDAT));
 
 		long readnum = g_pFuncCallBack(Code,nSetCode,DataType,pHisDat,datanum,time1,time2,nTQ,0);
 		if ( 2 > readnum || readnum > datanum )

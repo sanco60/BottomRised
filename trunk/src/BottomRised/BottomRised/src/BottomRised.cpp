@@ -1,6 +1,3 @@
-// choice1.cpp : Defines the entry point for the DLL application.
-// 插件实例
-
 #include "stdafx.h"
 #include "plugin.h"
 
@@ -57,7 +54,7 @@ void GetCopyRightInfo(LPPLUGIN info)
 const	BYTE	g_nAvoidMask[]={0xF8,0xF8,0xF8,0xF8};	// 无效数据标志(系统定义)
 
 char* g_nFatherCode[] = { "999999", "399001", "399005", "399006" };
-float g_fFatherRate[] = {0.0, 0.0, 0.0, 0.0};
+int g_FatherRate[] = {-1, -1, -1, -1};
 
 typedef enum _eFatherCode
 {
@@ -135,6 +132,141 @@ BOOL dateEqual(NTime t1, NTime t2)
 }
 
 
+NTime dateInterval(NTime nLeft, NTime nRight)
+{
+	NTime nInterval;
+	memset(&nInterval, 0, sizeof(NTime));
+	
+	unsigned int iLeft = 0;
+	unsigned int iRight = 0;
+	unsigned int iInterval = 0;
+
+	const unsigned int cDayofyear = 365;
+	const unsigned int cDayofmonth = 30;
+
+	iLeft = nLeft.year*cDayofyear + nLeft.month*cDayofmonth + nLeft.day;
+	iRight = nRight.year*cDayofyear + nRight.month*cDayofmonth + nRight.day;
+
+	iInterval = (iLeft > iRight) ? iLeft - iRight : iRight - iLeft;
+
+	nInterval.year = iInterval / cDayofyear;
+	iInterval = iInterval % cDayofyear;
+	nInterval.month = iInterval / cDayofmonth;
+	iInterval = iInterval % cDayofmonth;
+	nInterval.day = iInterval;
+
+	return nInterval;
+}
+
+
+/* 过滤函数 
+   返回值：以S和*开头的股票 或者 上市不满一年，返回FALSE，否则返回TRUE
+*/
+BOOL filterStock(char * Code, short nSetCode, NTime time1, NTime time2, BYTE nTQ)
+{
+	if (NULL == Code)
+		return FALSE;
+	
+	int iInfoNum = 2;
+	LPSTOCKINFO pStockInfo = new STOCKINFO[iInfoNum];
+	memset(pStockInfo, 0, iInfoNum*sizeof(STOCKINFO));
+
+	long readnum = g_pFuncCallBack(Code, nSetCode, STKINFO_DAT, pStockInfo, iInfoNum, time1, time2, nTQ, 0);
+	if (readnum <= 0)
+	{
+		delete[] pStockInfo;
+		pStockInfo = NULL;
+		return FALSE;
+	}
+	if ('S' == pStockInfo->Name[0] || '*' == pStockInfo->Name[0])
+	{
+		delete[] pStockInfo;
+		pStockInfo = NULL;
+		return FALSE;
+	}
+
+	NTime startDate, dInterval;
+	memset(&startDate, 0, sizeof(NTime));
+	memset(&dInterval, 0, sizeof(NTime));
+
+	long lStartDate = pStockInfo->J_start;
+	startDate.year = lStartDate / 10000;
+	lStartDate = lStartDate % 10000;
+	startDate.month = lStartDate / 100;
+	lStartDate = lStartDate % 100;
+	startDate.day = lStartDate;
+
+	dInterval = dateInterval(startDate, time2);
+
+	if (dInterval.year < 1)
+	{
+		delete[] pStockInfo;
+		pStockInfo = NULL;
+		return FALSE;
+	}
+
+	delete[] pStockInfo;
+	pStockInfo = NULL;
+
+	return TRUE;
+}
+
+
+int calcUppedPercent(char * Code, short nSetCode, short DataType, NTime time1, NTime time2, BYTE nTQ)
+{
+	int iUppedSpace = -1;
+
+	LPHISDAT pMin = NULL;
+
+	//窥视数据个数
+	long datanum = g_pFuncCallBack(Code, nSetCode, DataType, NULL, -1, time1, time2, nTQ, 0);
+	if ( 2 > datanum ){
+		return iUppedSpace;
+	}
+
+	LPHISDAT pHisDat = new HISDAT[datanum];
+
+	long readnum = g_pFuncCallBack(Code, nSetCode, DataType, pHisDat, datanum, time1, time2, nTQ, 0);
+	if ( 2 > readnum || readnum > datanum )
+	{
+		OutputDebugStringA("========= g_pFuncCallBack read error! =========\n");
+		delete[] pHisDat;
+		pHisDat = NULL;
+		return iUppedSpace;
+	}
+	
+	//停牌股不计算直接返回
+	LPHISDAT pLate = pHisDat + readnum - 1;
+	if (FALSE == dateEqual(pLate->Time, time2))
+	{
+		OutputDebugStringA(Code);
+		OutputDebugStringA("====== Stop trading today. \n");
+		delete[] pHisDat;
+		pHisDat = NULL;
+		return iUppedSpace;
+	}
+
+	//查找最低收盘价
+	pMin = minClose(pHisDat, readnum);
+
+	if (NULL == pMin)
+	{
+		OutputDebugStringA("========= minClose error! =========\n");
+		delete[] pHisDat;
+		pHisDat=NULL;
+		return iUppedSpace;
+	}
+
+	/*计算已上涨百分比*/
+	iUppedSpace = int(((pLate->Close - pMin->Close)/pMin->Close) * 100);
+
+	delete[] pHisDat;
+	pHisDat=NULL;
+
+	return iUppedSpace;
+}
+
+
 BOOL InputInfoThenCalc1(char * Code,short nSetCode,int Value[4],short DataType,short nDataNum,BYTE nTQ,unsigned long unused) //按最近数据计算
 {
 	BOOL nRet = FALSE;
@@ -145,149 +277,53 @@ BOOL InputInfoThenCalc2(char * Code,short nSetCode,int Value[4],short DataType,N
 {
 	BOOL nRet = FALSE;
 
-	if ( Value[0] < MIN_SCALE || Value[0] > MAX_SCALE 
-		|| NULL == Code )
-		goto endCalc2;	
+	if ( Value[0] < MIN_SCALE || Value[0] > MAX_SCALE || NULL == Code )
+		goto endCalc2;
 
-	float fFatherRate = 0.0, fSonRate = 0.0;
+	int iFatherRate = 0, iSonRate = 0;
 
 	/* 计算对应大盘已上升百分比 */
+	EFatherCode eFCode = mathFatherCode(Code);
+	if (EFatherCodeMax == eFCode)
 	{
-		EFatherCode eFCode = mathFatherCode(Code);
-		if (EFatherCodeMax == eFCode)
+		OutputDebugString(L"========= Didn't find FatherCode for ");
+		OutputDebugString((LPCWSTR)Code);
+		OutputDebugString(L" =========\n");
+		goto endCalc2;
+	}
+	//判断是否计算过对应指数
+	if (g_FatherRate[eFCode] < 0)
+	{
+		iFatherRate = calcUppedPercent(g_nFatherCode[eFCode], nSetCode, DataType, time1, time2, nTQ);
+		if (iFatherRate < 0)
 		{
-			OutputDebugString(L"========= Didn't find FatherCode for ");
-			OutputDebugString((LPCWSTR)Code);
-			OutputDebugString(L" =========\n");
+			OutputDebugStringA("=========== father calcUppedPercent error!!\n");
 			goto endCalc2;
 		}
-		//判断是否计算过对应指数
-		if (fEqual(g_fFatherRate[eFCode], 0.0))
-		{
-			/* 读取对应大盘数据 */
-			LPHISDAT pMin = NULL;
-
-			//窥视数据个数
-			long datanum = g_pFuncCallBack(g_nFatherCode[eFCode],nSetCode,DataType,NULL,-1,time1,time2,nTQ,0);
-			if ( 2 > datanum )
-			{
-				//OutputDebugString(L"========= g_pFuncCallBack error! =========\n");
-				goto endCalc2;
-			}
-		
-			LPHISDAT pHisDat = new HISDAT[datanum];
-			memset(pHisDat, 0, datanum*sizeof(HISDAT));
-
-			long readnum = g_pFuncCallBack(g_nFatherCode[eFCode],nSetCode,DataType,pHisDat,datanum,time1,time2,nTQ,0);
-			if ( 2 > readnum || readnum > datanum )
-			{
-				OutputDebugString(L"========= g_pFuncCallBack read error! =========\n");
-				delete[] pHisDat;
-				pHisDat = NULL;
-				goto endCalc2;
-			}
-		
-			//查找最低收盘价
-			pMin = minClose(pHisDat, readnum);
-			if (NULL == pMin)
-			{
-				OutputDebugString(L"========= minClose error! =========\n");
-				delete[] pHisDat;
-				pHisDat = NULL;
-				goto endCalc2;
-			}
-			//计算已上升百分比
-			LPHISDAT pLate = pHisDat + readnum - 1;
-			fFatherRate = (pLate->Close - pMin->Close)/pMin->Close;
-
-			g_fFatherRate[eFCode] = fFatherRate;
-
-			delete[] pHisDat;
-			pHisDat = NULL;
-		}
-		else
-		{
-			fFatherRate = g_fFatherRate[eFCode];
-		}		
+		g_FatherRate[eFCode] = iFatherRate;
+	}
+	else
+	{
+		iFatherRate = g_FatherRate[eFCode];
 	}
 
-	/* 过滤名称开头为：S和*的股票 */
+	if (FALSE == filterStock(Code, nSetCode, time1, time2, nTQ))
 	{
-		LPSTOCKINFO pStockInfo = new STOCKINFO[2];
-		memset(pStockInfo, 0, 2*sizeof(STOCKINFO));
-
-		long readnum = g_pFuncCallBack(Code, nSetCode, STKINFO_DAT, pStockInfo, 1, time2, time2, nTQ, 0);
-		if (readnum <= 0)
-		{
-			delete[] pStockInfo;
-			pStockInfo = NULL;
-			goto endCalc2;
-		}
-		if ('S' == pStockInfo->Name[0] || '*' == pStockInfo->Name[0])
-		{
-			delete[] pStockInfo;
-			pStockInfo = NULL;
-			goto endCalc2;
-		}
-		delete[] pStockInfo;
-		pStockInfo = NULL;
+		OutputDebugStringA("===== filter stock : ");
+		OutputDebugStringA(Code);
+		OutputDebugStringA(" =========\n");
+		goto endCalc2;
 	}
 
 	/* 计算个股已上升百分比 */
+	iSonRate = calcUppedPercent(Code, nSetCode, DataType, time1, time2, nTQ);
+	if (iSonRate < 0)
 	{
-		/**读取个股取数据 */
-		LPHISDAT pMin = NULL;
-
-		//窥视数据个数
-	    long datanum = g_pFuncCallBack(Code,nSetCode,DataType,NULL,-1,time1,time2,nTQ,0);
-		if ( 2 > datanum )
-		{
-			//OutputDebugString(L"========= g_pFuncCallBack error! =========\n");
-			goto endCalc2;
-		}
-
-		LPHISDAT pHisDat = new HISDAT[datanum];
-		memset(pHisDat, 0, datanum*sizeof(HISDAT));
-
-		long readnum = g_pFuncCallBack(Code,nSetCode,DataType,pHisDat,datanum,time1,time2,nTQ,0);
-		if ( 2 > readnum || readnum > datanum )
-		{
-			OutputDebugString(L"========= g_pFuncCallBack read error! =========\n");
-			delete[] pHisDat;
-			pHisDat = NULL;
-			goto endCalc2;
-		}
-		
-		//查找最低收盘价
-		pMin = minClose(pHisDat, readnum);
-		if (NULL == pMin)
-		{
-			OutputDebugString(L"========= minClose error! =========\n");
-			delete[] pHisDat;
-			pHisDat=NULL;
-			goto endCalc2;
-		}
-
-		/* 计算已上升百分比 */
-		LPHISDAT pLate = pHisDat + readnum - 1;
-		//停牌的股票忽略
-		/*if (!dateEqual(pLate->Time, time2))
-		{
-			OutputDebugString(L"========= ");
-			OutputDebugString((LPCWSTR)Code);
-			OutputDebugString(L" Stop Trading.=========\n");
-
-			delete[] pHisDat;
-			pHisDat=NULL;
-			goto endCalc2;
-		}*/
-
-		fSonRate = (pLate->Close - pMin->Close)/pMin->Close;
-		delete[] pHisDat;
-		pHisDat = NULL;
+		OutputDebugStringA("=========== son calcUppedPercent error!!\n");
+		goto endCalc2;
 	}
 	
-	if ( fSonRate*((float)Value[0]) < fFatherRate )
+	if ( iSonRate*Value[0] <= iFatherRate )
 		nRet = TRUE;
 	
 endCalc2:

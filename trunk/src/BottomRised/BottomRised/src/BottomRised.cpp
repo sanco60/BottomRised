@@ -220,14 +220,14 @@ int calcUppedPercent(char * Code, short nSetCode, short DataType, NTime time1, N
 
 	//窥视数据个数
 	long datanum = g_pFuncCallBack(Code, nSetCode, DataType, NULL, -1, time1, time2, nTQ, 0);
-	if ( 2 > datanum ){
+	if ( 1 > datanum ){
 		return iUppedSpace;
 	}
 
 	LPHISDAT pHisDat = new HISDAT[datanum];
 
 	long readnum = g_pFuncCallBack(Code, nSetCode, DataType, pHisDat, datanum, time1, time2, nTQ, 0);
-	if ( 2 > readnum || readnum > datanum )
+	if ( 1 > readnum || readnum > datanum )
 	{
 		OutputDebugStringA("========= g_pFuncCallBack read error! =========\n");
 		delete[] pHisDat;
@@ -237,7 +237,8 @@ int calcUppedPercent(char * Code, short nSetCode, short DataType, NTime time1, N
 	
 	//停牌股不计算直接返回
 	LPHISDAT pLate = pHisDat + readnum - 1;
-	if (FALSE == dateEqual(pLate->Time, time2))
+	if (FALSE == dateEqual(pLate->Time, time2)
+		|| fEqual(pLate->fVolume, 0.0))
 	{
 		OutputDebugStringA(Code);
 		OutputDebugStringA("====== Stop trading today. \n");
